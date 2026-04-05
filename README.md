@@ -10,4 +10,4 @@ http://localhost:8080/ask?q=cskiplscore
 
 http://localhost:8080/ask?q=whatisweatherinbostonnow?
 
-http://localhost:8080/ask?q=weatherofboston
+http://localhost:8080/ask?q=weatherinboston
