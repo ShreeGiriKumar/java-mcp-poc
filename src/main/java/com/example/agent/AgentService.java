@@ -1,8 +1,10 @@
 package com.example.agent;
 
 import com.example.tools.Tool;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,7 @@ import java.util.*;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AgentService {
 
     private final List<Tool> tools;
@@ -80,7 +83,7 @@ public class AgentService {
     private String sendToolResult(String userInput,
                                  String toolName,
                                  Map<String, Object> args,
-                                 Map<String, Object> result) {
+                                 Map<String, Object> result) throws JsonProcessingException {
 
         Map<String, Object> request = new HashMap<>();
 
@@ -95,7 +98,7 @@ public class AgentService {
                                         "type", "function",
                                         "function", Map.of(
                                                 "name", toolName,
-                                                "arguments", args
+                                                "arguments", objectMapper.writeValueAsString(args)
                                         )
                                 )
                         )),
@@ -111,12 +114,18 @@ public class AgentService {
         HttpEntity<Map<String, Object>> entity =
                 new HttpEntity<>(request, headers);
 
-        ResponseEntity<Map> response =
-                restTemplate.postForEntity(baseUrl, entity, Map.class);
+        try {
+            ResponseEntity<Map> response =
+                    restTemplate.postForEntity(baseUrl, entity, Map.class);
 
-        Map body = response.getBody();
-        return (String) ((Map) ((List<Map>) body.get("choices")).get(0)
-                .get("message")).get("content");
+            Map body = response.getBody();
+            return (String) ((Map) ((List<Map>) body.get("choices")).get(0)
+                    .get("message")).get("content");
+        }
+        catch (Exception ex){
+            log.error("Exception occured on sending the tool response", ex.getMessage());
+            return null;
+        }
     }
 
     private List<Map<String, Object>> buildToolDefinitions() {
