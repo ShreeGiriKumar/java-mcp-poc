@@ -123,7 +123,7 @@ public class AgentService {
                     .get("message")).get("content");
         }
         catch (Exception ex){
-            log.error("Exception occured on sending the tool response", ex.getMessage());
+            log.error("Exception occurred on sending the tool response {}", ex.getMessage());
             return null;
         }
     }
