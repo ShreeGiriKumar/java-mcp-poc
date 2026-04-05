@@ -11,7 +11,10 @@ public class ChatController {
     private final AgentService agentService;
 
     @GetMapping("/ask")
-    public String ask(@RequestParam String q) throws Exception {
-        return agentService.ask(q);
+    public String ask(@RequestParam String q,
+                      @RequestParam(defaultValue = "default") String session)
+            throws Exception {
+
+        return agentService.ask(q, session);
     }
 }

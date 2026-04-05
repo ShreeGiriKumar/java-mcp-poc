@@ -1,7 +1,6 @@
 package com.example.agent;
 
 import com.example.tools.Tool;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,6 +17,8 @@ import java.util.*;
 public class AgentService {
 
     private final List<Tool> tools;
+    private final ChatMemoryService memoryService;
+
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -27,33 +28,45 @@ public class AgentService {
     @Value("${groq.base.url}")
     private String baseUrl;
 
-    public String ask(String userInput) throws Exception {
+    // 🔥 MAIN ENTRY
+    public String ask(String userInput, String sessionId) throws Exception {
 
+        log.info("User input: {}", userInput);
+
+        // 🧠 Build message history
+        List<Map<String, Object>> messages = new ArrayList<>();
+
+        Map.of(
+                "role", "system",
+                "content",
+                "You are a strict AI assistant.\n" +
+                        "You MUST use tools when applicable.\n" +
+                        "Do NOT write function calls manually.\n" +
+                        "ONLY use the provided tools via tool_calls JSON.\n" +
+                        "Use 'getWeather' for weather queries.\n" +
+                        "Use 'getScore' for cricket score queries.\n" +
+                        "Use 'calculate' for math.\n" +
+                        "If a tool is needed, ALWAYS call it using tool_calls."
+        );
+
+        messages.addAll(memoryService.getHistory(sessionId));
+
+        messages.add(Map.of("role", "user", "content", userInput));
+
+        // 🔧 Prepare request
         Map<String, Object> request = new HashMap<>();
-
         request.put("model", "llama-3.3-70b-versatile");
-
-        request.put("messages", List.of(
-                Map.of("role", "user", "content", userInput)
-        ));
-
+        request.put("messages", messages);
         request.put("tools", buildToolDefinitions());
         request.put("tool_choice", "auto");
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(apiKey);
-        headers.setContentType(MediaType.APPLICATION_JSON);
+        Map response = callLLM(request);
 
-        HttpEntity<Map<String, Object>> entity =
-                new HttpEntity<>(request, headers);
+        Map message = extractMessage(response);
 
-        ResponseEntity<Map> response =
-                restTemplate.postForEntity(baseUrl, entity, Map.class);
+        String finalResponse;
 
-        Map body = response.getBody();
-        Map message = (Map) ((List<Map>) body.get("choices")).get(0).get("message");
-
-        // TOOL CALL
+        // 🔥 TOOL CALL FLOW
         if (message.containsKey("tool_calls")) {
 
             Map toolCall = ((List<Map>) message.get("tool_calls")).get(0);
@@ -67,6 +80,8 @@ public class AgentService {
                             Map.class
                     );
 
+            log.info("Tool selected: {} with args {}", toolName, args);
+
             Tool tool = tools.stream()
                     .filter(t -> t.getName().equals(toolName))
                     .findFirst()
@@ -74,38 +89,65 @@ public class AgentService {
 
             Map<String, Object> result = tool.execute(args);
 
-            return sendToolResult(userInput, toolName, args, result);
+            log.info("Tool result: {}", result);
+
+            finalResponse = sendToolResultToLLM(messages, toolName, args, result);
+
+        } else {
+            finalResponse = (String) message.get("content");
         }
+
+        // 💾 Save memory
+        memoryService.addMessage(sessionId,
+                Map.of("role", "user", "content", userInput));
+
+        memoryService.addMessage(sessionId,
+                Map.of("role", "assistant", "content", finalResponse));
+
+        return finalResponse;
+    }
+
+    // 🔁 SECOND CALL (tool result back to LLM)
+    private String sendToolResultToLLM(List<Map<String, Object>> messages,
+                                       String toolName,
+                                       Map<String, Object> args,
+                                       Map<String, Object> result) throws Exception {
+
+        List<Map<String, Object>> newMessages = new ArrayList<>(messages);
+
+        newMessages.add(Map.of(
+                "role", "assistant",
+                "tool_calls", List.of(
+                        Map.of(
+                                "id", "call_1",
+                                "type", "function",
+                                "function", Map.of(
+                                        "name", toolName,
+                                        "arguments", objectMapper.writeValueAsString(args)
+                                )
+                        )
+                )
+        ));
+
+        newMessages.add(Map.of(
+                "role", "tool",
+                "tool_call_id", "call_1",
+                "content", objectMapper.writeValueAsString(result)
+        ));
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("model", "llama-3.3-70b-versatile");
+        request.put("messages", newMessages);
+
+        Map response = callLLM(request);
+
+        Map message = extractMessage(response);
 
         return (String) message.get("content");
     }
 
-    private String sendToolResult(String userInput,
-                                 String toolName,
-                                 Map<String, Object> args,
-                                 Map<String, Object> result) throws JsonProcessingException {
-
-        Map<String, Object> request = new HashMap<>();
-
-        request.put("model", "llama-3.3-70b-versatile");
-
-        request.put("messages", List.of(
-                Map.of("role", "user", "content", userInput),
-                Map.of("role", "assistant",
-                        "tool_calls", List.of(
-                                Map.of(
-                                        "id", "call_1",
-                                        "type", "function",
-                                        "function", Map.of(
-                                                "name", toolName,
-                                                "arguments", objectMapper.writeValueAsString(args)
-                                        )
-                                )
-                        )),
-                Map.of("role", "tool",
-                        "tool_call_id", "call_1",
-                        "content", result.toString())
-        ));
+    // 🌐 COMMON LLM CALL
+    private Map callLLM(Map<String, Object> request) {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(apiKey);
@@ -114,20 +156,18 @@ public class AgentService {
         HttpEntity<Map<String, Object>> entity =
                 new HttpEntity<>(request, headers);
 
-        try {
-            ResponseEntity<Map> response =
-                    restTemplate.postForEntity(baseUrl, entity, Map.class);
+        ResponseEntity<Map> response =
+                restTemplate.postForEntity(baseUrl, entity, Map.class);
 
-            Map body = response.getBody();
-            return (String) ((Map) ((List<Map>) body.get("choices")).get(0)
-                    .get("message")).get("content");
-        }
-        catch (Exception ex){
-            log.error("Exception occurred on sending the tool response {}", ex.getMessage());
-            return null;
-        }
+        return response.getBody();
     }
 
+    // 🧠 EXTRACT MESSAGE
+    private Map extractMessage(Map response) {
+        return (Map) ((List<Map>) response.get("choices")).get(0).get("message");
+    }
+
+    // 🧩 TOOL DEFINITIONS
     private List<Map<String, Object>> buildToolDefinitions() {
         return tools.stream().map(t -> Map.of(
                 "type", "function",
