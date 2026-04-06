@@ -28,125 +28,124 @@ public class AgentService {
     @Value("${groq.base.url}")
     private String baseUrl;
 
-    // 🔥 MAIN ENTRY
+    // 🚀 FINAL ENTRY
     public String ask(String userInput, String sessionId) throws Exception {
 
         log.info("User input: {}", userInput);
 
-        // 🧠 Build message history
-        List<Map<String, Object>> messages = new ArrayList<>();
+        // 🔥 1. HYBRID SHORT-CIRCUIT (CRITICAL FIX)
+        if (isWeatherFahrenheitQuery(userInput)) {
+            return handleWeatherFahrenheit(userInput);
+        }
 
-        Map.of(
-                "role", "system",
-                "content",
-                "You are a strict AI assistant.\n" +
-                        "You MUST use tools when applicable.\n" +
-                        "Do NOT write function calls manually.\n" +
-                        "ONLY use the provided tools via tool_calls JSON.\n" +
-                        "Use 'getWeather' for weather queries.\n" +
-                        "Use 'getScore' for cricket score queries.\n" +
-                        "Use 'calculate' for math.\n" +
-                        "If a tool is needed, ALWAYS call it using tool_calls."
-        );
+        // 🧠 2. NORMAL LLM FLOW (SINGLE TOOL ONLY)
+        List<Map<String, Object>> messages = buildMessages(userInput, sessionId);
 
-        messages.addAll(memoryService.getHistory(sessionId));
-
-        messages.add(Map.of("role", "user", "content", userInput));
-
-        // 🔧 Prepare request
         Map<String, Object> request = new HashMap<>();
         request.put("model", "llama-3.3-70b-versatile");
         request.put("messages", messages);
         request.put("tools", buildToolDefinitions());
-        request.put("tool_choice", "auto");
+        request.put("tool_choice", "auto"); // 🔥 important
+        request.put("temperature", 0);
 
         Map response = callLLM(request);
-
         Map message = extractMessage(response);
 
-        String finalResponse;
-
-        // 🔥 TOOL CALL FLOW
+        // 🔧 Handle tool call (ONLY ONE STEP)
         if (message.containsKey("tool_calls")) {
 
             Map toolCall = ((List<Map>) message.get("tool_calls")).get(0);
             Map function = (Map) toolCall.get("function");
 
             String toolName = (String) function.get("name");
-
             Map<String, Object> args =
-                    objectMapper.readValue(
-                            (String) function.get("arguments"),
-                            Map.class
-                    );
+                    objectMapper.readValue((String) function.get("arguments"), Map.class);
 
-            log.info("Tool selected: {} with args {}", toolName, args);
+            // 🚫 BLOCK nested calls
+            String rawArgs = objectMapper.writeValueAsString(args);
+            if (rawArgs.contains("<function=")) {
+                log.warn("🚫 Blocking nested function call: {}", rawArgs);
+                return "Unable to process complex nested request safely.";
+            }
 
             Tool tool = tools.stream()
                     .filter(t -> t.getName().equals(toolName))
                     .findFirst()
-                    .orElseThrow();
+                    .orElseThrow(() -> new RuntimeException("Tool not found: " + toolName));
 
             Map<String, Object> result = tool.execute(args);
 
-            log.info("Tool result: {}", result);
+            log.info("Tool {} executed → {}", toolName, result);
 
-            finalResponse = sendToolResultToLLM(messages, toolName, args, result);
-
-        } else {
-            finalResponse = (String) message.get("content");
+            return result.toString();
         }
 
-        // 💾 Save memory
-        memoryService.addMessage(sessionId,
-                Map.of("role", "user", "content", userInput));
+        // ✅ Normal response
+        String finalResponse = (String) message.get("content");
 
-        memoryService.addMessage(sessionId,
-                Map.of("role", "assistant", "content", finalResponse));
+        memoryService.addMessage(sessionId, Map.of("role", "user", "content", userInput));
+        memoryService.addMessage(sessionId, Map.of("role", "assistant", "content", finalResponse));
 
         return finalResponse;
     }
 
-    // 🔁 SECOND CALL (tool result back to LLM)
-    private String sendToolResultToLLM(List<Map<String, Object>> messages,
-                                       String toolName,
-                                       Map<String, Object> args,
-                                       Map<String, Object> result) throws Exception {
+    // 🔥 HYBRID ORCHESTRATION (JAVA CONTROL)
+    private String handleWeatherFahrenheit(String userInput) {
 
-        List<Map<String, Object>> newMessages = new ArrayList<>(messages);
+        log.info("⚡ Hybrid flow triggered: weather → conversion");
 
-        newMessages.add(Map.of(
-                "role", "assistant",
-                "tool_calls", List.of(
-                        Map.of(
-                                "id", "call_1",
-                                "type", "function",
-                                "function", Map.of(
-                                        "name", toolName,
-                                        "arguments", objectMapper.writeValueAsString(args)
-                                )
-                        )
-                )
-        ));
+        Tool weatherTool = tools.stream()
+                .filter(t -> t.getName().equals("getWeather"))
+                .findFirst()
+                .orElseThrow();
 
-        newMessages.add(Map.of(
-                "role", "tool",
-                "tool_call_id", "call_1",
-                "content", objectMapper.writeValueAsString(result)
-        ));
+        Map<String, Object> weather = weatherTool.execute(Map.of("city", extractCity(userInput)));
 
-        Map<String, Object> request = new HashMap<>();
-        request.put("model", "llama-3.3-70b-versatile");
-        request.put("messages", newMessages);
+        double tempC = Double.parseDouble(weather.get("temperature").toString());
 
-        Map response = callLLM(request);
+        Tool convertTool = tools.stream()
+                .filter(t -> t.getName().equals("convertTemperature"))
+                .findFirst()
+                .orElseThrow();
 
-        Map message = extractMessage(response);
+        Map<String, Object> converted =
+                convertTool.execute(Map.of("value", tempC, "toUnit", "F"));
 
-        return (String) message.get("content");
+        return "Temperature in " + weather.get("city") + " is " +
+                converted.get("result") + " °F";
     }
 
-    // 🌐 COMMON LLM CALL
+    private boolean isWeatherFahrenheitQuery(String input) {
+        String text = input.toLowerCase();
+        return text.contains("weather") && text.contains("fahrenheit");
+    }
+
+    private String extractCity(String input) {
+        if (input.toLowerCase().contains("boston")) return "Boston";
+        if (input.toLowerCase().contains("new york")) return "New York";
+        return "Boston"; // default
+    }
+
+    // 🧠 LLM MESSAGE BUILD
+    private List<Map<String, Object>> buildMessages(String userInput, String sessionId) {
+        List<Map<String, Object>> messages = new ArrayList<>();
+
+        messages.add(Map.of(
+                "role", "system",
+                "content",
+                "You are an AI assistant.\n" +
+                        "Call only ONE tool at a time.\n" +
+                        "Never include another tool call inside arguments.\n" +
+                        "If unsure, respond normally instead of forcing a tool."
+        ));
+
+        messages.addAll(memoryService.getHistory(sessionId));
+        messages.add(Map.of("role", "user", "content", userInput));
+
+        return messages;
+    }
+
+    // 🌐 LLM CALL
     private Map callLLM(Map<String, Object> request) {
 
         HttpHeaders headers = new HttpHeaders();
@@ -156,10 +155,7 @@ public class AgentService {
         HttpEntity<Map<String, Object>> entity =
                 new HttpEntity<>(request, headers);
 
-        ResponseEntity<Map> response =
-                restTemplate.postForEntity(baseUrl, entity, Map.class);
-
-        return response.getBody();
+        return restTemplate.postForEntity(baseUrl, entity, Map.class).getBody();
     }
 
     // 🧠 EXTRACT MESSAGE

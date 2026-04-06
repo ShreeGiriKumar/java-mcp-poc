@@ -57,6 +57,13 @@ public class CalculatorTool implements Tool {
                 return Map.of("result", result);
             }
 
+            if (expr.contains("-")) {
+                String[] parts = expr.split("\\-");
+                double result = Double.parseDouble(parts[0].trim()) -
+                        Double.parseDouble(parts[1].trim());
+                return Map.of("result", result);
+            }
+
             return Map.of("error", "Unsupported expression");
 
         } catch (Exception e) {
