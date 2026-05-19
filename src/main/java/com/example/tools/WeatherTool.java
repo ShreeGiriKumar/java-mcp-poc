@@ -43,8 +43,8 @@ public class WeatherTool implements Tool {
         String city = (String) input.get("city");
 
         // Simple mapping (for PoC)
-        double lat = 42.3601; // default Boston
-        double lon = -71.0589;
+        double lat = 33.0217; // default Plano
+        double lon = 96.6980;
 
         if (city.toLowerCase().contains("new york")) {
             lat = 40.7128;
