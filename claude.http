@@ -1,0 +1,29 @@
+### Single-agent: weather
+GET http://localhost:8080/ask?q=What+is+the+weather+in+New+York?&session=s1
+
+###
+
+### Single-agent: math
+GET http://localhost:8080/ask?q=What+is+25*4?&session=s1
+
+###
+
+### Single-agent: cricket
+GET http://localhost:8080/ask?q=What+is+the+CSK+score?&session=s1
+
+###
+
+### Multi-agent: single domain (routes to weather_agent)
+GET http://localhost:8080/multi-agent?q=What+is+the+weather+in+New+York+in+Fahrenheit?
+
+###
+
+### Multi-agent: compound question (routes to weather_agent + math_agent simultaneously)
+GET http://localhost:8080/multi-agent?q=What+is+the+weather+in+New+York+and+what+is+125*8?
+
+###
+
+### Multi-agent: all three domains
+GET http://localhost:8080/multi-agent?q=What+is+the+CSK+score,+the+weather+in+New+York,+and+what+is+100/4?
+
+###
